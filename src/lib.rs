@@ -7,14 +7,15 @@
 //! source-declaration field order, sorted map keys, shortest-roundtrip
 //! numbers, single-space expression separators.
 //!
-//! ```ignore
-//! #[derive(serde::Serialize, serde::Deserialize)]
+//! ```
+//! #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
 //! struct Point { horizontal: f64, vertical: f64 }
 //!
 //! let p = Point { horizontal: 3.0, vertical: 4.0 };
 //! let text = nota_serde::to_string(&p)?;
-//! // text == "(Point horizontal=3.0 vertical=4.0)"
+//! assert_eq!(text, "(Point horizontal=3.0 vertical=4.0)");
 //! let back: Point = nota_serde::from_str(&text)?;
+//! assert_eq!(back, p);
 //! # Ok::<(), nota_serde::Error>(())
 //! ```
 
