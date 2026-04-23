@@ -1,8 +1,11 @@
 //! Serializer emitting canonical nota text.
 //!
-//! Source-declaration field order, sorted map keys, shortest-roundtrip
-//! numbers, single-space separators within expressions, `#`-prefixed
-//! hex for bytes, `[...]` / `[| |]` for strings.
+//! Records are positional: `(TypeName v1 v2 …)` with fields in
+//! source-declaration order. Newtype structs wrap: `struct Id(u32)` →
+//! `(Id 42)`. Multi-field unnamed structs (tuple structs with len ≥ 2)
+//! are forbidden — use a named-field struct instead. Maps sort by
+//! serialized key bytes. Floats always contain `.`. Strings are
+//! `[ inline ]` or `[| multiline |]`. Bytes are `#<lowercase-hex>`.
 
 use std::fmt::Write as _;
 
@@ -146,10 +149,15 @@ impl<'a> ser::Serializer for &'a mut Serializer {
 
     fn serialize_newtype_struct<T: Serialize + ?Sized>(
         self,
-        _name: &'static str,
+        name: &'static str,
         value: &T,
     ) -> Result<()> {
-        value.serialize(self)
+        self.output.push('(');
+        self.output.push_str(name);
+        self.output.push(' ');
+        value.serialize(&mut *self)?;
+        self.output.push(')');
+        Ok(())
     }
 
     fn serialize_newtype_variant<T: Serialize + ?Sized>(
@@ -180,11 +188,12 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     fn serialize_tuple_struct(
         self,
         name: &'static str,
-        _len: usize,
+        len: usize,
     ) -> Result<Self::SerializeTupleStruct> {
-        self.output.push('(');
-        self.output.push_str(name);
-        Ok(NamedSeqSerializer { ser: self })
+        // Multi-field tuple structs have no schema field names — nota
+        // can't map position → meaning. Single-field tuple structs go
+        // through serialize_newtype_struct, not here. Reject at any len.
+        Err(Error::MultiFieldTupleStructForbidden { name, len })
     }
 
     fn serialize_tuple_variant(
@@ -192,11 +201,15 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         _name: &'static str,
         _variant_index: u32,
         variant: &'static str,
-        _len: usize,
+        len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
-        self.output.push('(');
-        self.output.push_str(variant);
-        Ok(NamedSeqSerializer { ser: self })
+        // Multi-field tuple variants (e.g. `Pair(i32, i32)`) have no
+        // schema field names. Single-field variants go through
+        // serialize_newtype_variant instead. Reject here.
+        Err(Error::MultiFieldTupleStructForbidden {
+            name: variant,
+            len,
+        })
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
@@ -298,10 +311,11 @@ pub struct StructSerializer<'a> {
 }
 
 impl<'a> StructSerializer<'a> {
-    fn field<T: Serialize + ?Sized>(&mut self, key: &'static str, value: &T) -> Result<()> {
+    fn field<T: Serialize + ?Sized>(&mut self, _key: &'static str, value: &T) -> Result<()> {
+        // Positional: field names come from the Rust schema, not from
+        // the text. Emit a single space before each value; the struct's
+        // opening `(TypeName` was already written by serialize_struct.
         self.ser.output.push(' ');
-        self.ser.output.push_str(key);
-        self.ser.output.push('=');
         value.serialize(&mut *self.ser)
     }
     fn close(self) {
@@ -439,10 +453,10 @@ mod tests {
     }
 
     #[test]
-    fn newtype_struct_is_transparent() {
+    fn newtype_struct_wraps() {
         #[derive(Serialize)]
         struct Id(u32);
-        assert_eq!(to_string(&Id(42)).unwrap(), "42");
+        assert_eq!(to_string(&Id(42)).unwrap(), "(Id 42)");
     }
 
     #[test]
@@ -453,17 +467,25 @@ mod tests {
     }
 
     #[test]
-    fn tuple_struct() {
+    fn tuple_struct_rejected() {
         #[derive(Serialize)]
         struct Pair(i32, i32);
-        assert_eq!(to_string(&Pair(3, 4)).unwrap(), "(Pair 3 4)");
+        let err = to_string(&Pair(3, 4)).unwrap_err();
+        assert!(
+            format!("{err}").contains("multi-field unnamed struct"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn tuple_variant() {
+    fn tuple_variant_rejected() {
         #[derive(Serialize)]
         enum E { Pair(i32, i32) }
-        assert_eq!(to_string(&E::Pair(3, 4)).unwrap(), "(Pair 3 4)");
+        let err = to_string(&E::Pair(3, 4)).unwrap_err();
+        assert!(
+            format!("{err}").contains("multi-field unnamed struct"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -484,7 +506,7 @@ mod tests {
         struct Point { horizontal: f64, vertical: f64 }
         assert_eq!(
             to_string(&Point { horizontal: 3.0, vertical: 4.0 }).unwrap(),
-            "(Point horizontal=3.0 vertical=4.0)"
+            "(Point 3.0 4.0)"
         );
     }
 
@@ -494,7 +516,7 @@ mod tests {
         enum Shape {
             Circle { radius: f64 },
         }
-        assert_eq!(to_string(&Shape::Circle { radius: 2.0 }).unwrap(), "(Circle radius=2.0)");
+        assert_eq!(to_string(&Shape::Circle { radius: 2.0 }).unwrap(), "(Circle 2.0)");
     }
 
     #[test]
@@ -504,7 +526,7 @@ mod tests {
         #[derive(Serialize)]
         struct Line { start: Point, end: Point }
         let l = Line { start: Point { x: 0.0, y: 0.0 }, end: Point { x: 1.0, y: 2.0 } };
-        assert_eq!(to_string(&l).unwrap(), "(Line start=(Point x=0.0 y=0.0) end=(Point x=1.0 y=2.0))");
+        assert_eq!(to_string(&l).unwrap(), "(Line (Point 0.0 0.0) (Point 1.0 2.0))");
     }
 
     #[test]
@@ -539,8 +561,16 @@ mod tests {
         let pts = vec![Point { x: 0, y: 0 }, Point { x: 1, y: 1 }];
         assert_eq!(
             to_string(&pts).unwrap(),
-            "<(Point x=0 y=0) (Point x=1 y=1)>"
+            "<(Point 0 0) (Point 1 1)>"
         );
+    }
+
+    #[test]
+    fn option_of_newtype_wraps() {
+        #[derive(Serialize)]
+        struct Id(u32);
+        let some: Option<Id> = Some(Id(42));
+        assert_eq!(to_string(&some).unwrap(), "(Id 42)");
     }
 
     #[test]

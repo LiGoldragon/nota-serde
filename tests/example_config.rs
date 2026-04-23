@@ -1,8 +1,9 @@
 //! Phase 5 — parse a realistic `.nota` document through nota-serde.
 //!
-//! Covers: nested structs, enums with mixed variant kinds, Vec of structs,
-//! Option, bytes, maps, multiline strings, comments. Exercises the full
-//! public API on a single document.
+//! Covers: nested structs, enums with mixed variant kinds (unit +
+//! newtype + struct), Vec of structs, Option, maps, multiline
+//! strings, comments. Exercises the full public API on a single
+//! document under the positional-records syntax.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -28,6 +29,7 @@ struct Dep {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[allow(clippy::enum_variant_names)]
 enum License {
     LicenseOfNonAuthority,
     Mit,
@@ -70,21 +72,20 @@ fn roundtrip_realistic_document() {
     let doc = sample();
     let text = nota_serde::to_string(&doc).expect("serialize");
 
-    // Spot-check a few stable substrings — canonical order of fields is
-    // source-declaration order.
-    assert!(text.starts_with("(Project name=[nota-serde]"));
-    assert!(text.contains("version=[0.1.0]"));
-    assert!(text.contains("license=LicenseOfNonAuthority"));
+    // Spot-check stable substrings. Fields are positional in
+    // source-declaration order — name first.
+    assert!(text.starts_with("(Project [nota-serde] [0.1.0]"));
+    assert!(text.contains("LicenseOfNonAuthority"));
     assert!(text.contains("(Released [2026-04-23])"));
-    assert!(text.contains("release_notes=None"));
+    // Option<T>::None renders as bare `None`; final position in the record.
+    assert!(text.ends_with("None)"));
 
     // Canonical map sort: debug < strict < verbose.
-    let flags_pos = text.find("flags=").unwrap();
-    let rest = &text[flags_pos..];
-    let d = rest.find("debug").unwrap();
-    let s = rest.find("strict").unwrap();
-    let v = rest.find("verbose").unwrap();
-    assert!(d < s && s < v, "map entries not sorted: {rest}");
+    // Map entries are `([key] value)` triples inside `< >`.
+    let d = text.find("[debug]").unwrap();
+    let s = text.find("[strict]").unwrap();
+    let v = text.find("[verbose]").unwrap();
+    assert!(d < s && s < v, "map entries not sorted: {text}");
 
     let back: Project = nota_serde::from_str(&text).expect("deserialize");
     assert_eq!(back, doc);
@@ -100,8 +101,10 @@ fn roundtrip_with_archived_status_variant() {
     doc.release_notes = Some("see report 007".into());
 
     let text = nota_serde::to_string(&doc).expect("serialize");
-    assert!(text.contains("(Archived reason=[superseded by nexus-serde] at_commit=[abcdef])"));
-    assert!(text.contains("release_notes=[see report 007]"));
+    // Struct-variant in positional form: (Archived reason-val at_commit-val).
+    assert!(text.contains("(Archived [superseded by nexus-serde] [abcdef])"));
+    // Option::Some(x) renders transparently — just the string.
+    assert!(text.contains("[see report 007]"));
 
     let back: Project = nota_serde::from_str(&text).expect("deserialize");
     assert_eq!(back, doc);
@@ -109,24 +112,24 @@ fn roundtrip_with_archived_status_variant() {
 
 #[test]
 fn parse_hand_written_document() {
-    // Mimics what a developer would actually write — with comments and
-    // indentation that the parser must tolerate.
+    // What a developer would write — positional, indented, with
+    // comments scattered across positions. Parser must tolerate.
     let text = r#"
         ;; Demo project manifest
         (Project
-          name=[tiny]
-          version=[0.0.1]
-          description=[|
+          [tiny]
+          [0.0.1]
+          [|
             two
             lines
           |]
-          authors=<[anon]>
+          <[anon]>
           ;; no deps yet
-          dependencies=<>
-          flags=<([debug] true)>
-          license=Mit
-          status=Alpha
-          release_notes=None)
+          <>
+          <([debug] true)>
+          Mit
+          Alpha
+          None)
     "#;
     let p: Project = nota_serde::from_str(text).expect("parse hand-written");
     assert_eq!(p.name, "tiny");

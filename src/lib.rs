@@ -3,9 +3,10 @@
 //! Implements [`serde::Serializer`] and [`serde::Deserializer`] over nota
 //! syntax: 4 delimiter pairs (`( )` records, `[ ]` / `[| |]` strings,
 //! `< >` sequences), 2 sigils (`;;` line comments, `#` byte-literal
-//! prefix), Pascal/camel/kebab identifiers. Canonical form:
-//! source-declaration field order, sorted map keys, shortest-roundtrip
-//! numbers, single-space expression separators.
+//! prefix), Pascal/camel/kebab identifiers. Records are positional —
+//! field identities come from the Rust schema, not the text. Canonical
+//! form: source-declaration field order, sorted map keys,
+//! shortest-roundtrip numbers, single-space expression separators.
 //!
 //! ```
 //! #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
@@ -13,7 +14,7 @@
 //!
 //! let p = Point { horizontal: 3.0, vertical: 4.0 };
 //! let text = nota_serde::to_string(&p)?;
-//! assert_eq!(text, "(Point horizontal=3.0 vertical=4.0)");
+//! assert_eq!(text, "(Point 3.0 4.0)");
 //! let back: Point = nota_serde::from_str(&text)?;
 //! assert_eq!(back, p);
 //! # Ok::<(), nota_serde::Error>(())

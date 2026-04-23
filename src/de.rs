@@ -214,10 +214,20 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
 
     fn deserialize_newtype_struct<V: Visitor<'de>>(
         self,
-        _name: &'static str,
+        name: &'static str,
         visitor: V,
     ) -> Result<V::Value> {
-        visitor.visit_newtype_struct(self)
+        // Newtype structs wrap: `(Name value)`.
+        self.stream.expect_matching(&Token::LParen)?;
+        match self.stream.expect_next()? {
+            Token::Ident(s) if s == name => {}
+            other => return Err(Error::Custom(format!(
+                "expected newtype struct `{name}`, got {other:?}"
+            ))),
+        }
+        let value = visitor.visit_newtype_struct(&mut *self)?;
+        self.stream.expect_matching(&Token::RParen)?;
+        Ok(value)
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
@@ -234,17 +244,12 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_tuple_struct<V: Visitor<'de>>(
         self,
         name: &'static str,
-        _len: usize,
-        visitor: V,
+        len: usize,
+        _visitor: V,
     ) -> Result<V::Value> {
-        self.stream.expect_matching(&Token::LParen)?;
-        match self.stream.expect_next()? {
-            Token::Ident(s) if s == name => {}
-            other => return Err(Error::Custom(format!("expected tuple struct `{name}`, got {other:?}"))),
-        }
-        let value = visitor.visit_seq(PositionalArgs { de: self })?;
-        self.stream.expect_matching(&Token::RParen)?;
-        Ok(value)
+        // Multi-field unnamed structs have no schema field names.
+        // Single-field tuple structs go through deserialize_newtype_struct.
+        Err(Error::MultiFieldTupleStructForbidden { name, len })
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
@@ -260,12 +265,16 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
         _fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value> {
+        // Positional: field identities come from the Rust schema, not
+        // the text. serde's derive-generated visitor accepts both
+        // visit_seq (positional) and visit_map (named); we drive it
+        // through visit_seq.
         self.stream.expect_matching(&Token::LParen)?;
         match self.stream.expect_next()? {
             Token::Ident(s) if s == name => {}
             other => return Err(Error::Custom(format!("expected struct `{name}`, got {other:?}"))),
         }
-        let value = visitor.visit_map(StructReader { de: self, peeked_key: None })?;
+        let value = visitor.visit_seq(PositionalArgs { de: self })?;
         self.stream.expect_matching(&Token::RParen)?;
         Ok(value)
     }
@@ -378,41 +387,6 @@ impl<'a, 'de> MapAccess<'de> for MapReader<'a, 'de> {
     }
 }
 
-// ---------- struct reader ----------
-
-struct StructReader<'a, 'de> {
-    de: &'a mut Deserializer<'de>,
-    peeked_key: Option<String>,
-}
-
-impl<'a, 'de> MapAccess<'de> for StructReader<'a, 'de> {
-    type Error = Error;
-
-    fn next_key_seed<K: DeserializeSeed<'de>>(
-        &mut self,
-        seed: K,
-    ) -> Result<Option<K::Value>> {
-        match self.de.stream.peek()? {
-            Some(Token::RParen) | None => Ok(None),
-            Some(Token::Ident(_)) => {
-                // Consume ident, then require `=`.
-                let Token::Ident(name) = self.de.stream.next()?.unwrap() else { unreachable!() };
-                self.de.stream.expect_matching(&Token::Equals)?;
-                self.peeked_key = Some(name.clone());
-                seed.deserialize(name.into_deserializer()).map(Some)
-            }
-            other => Err(Error::Custom(format!(
-                "expected field name, got {other:?}"
-            ))),
-        }
-    }
-
-    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value> {
-        self.peeked_key = None;
-        seed.deserialize(&mut *self.de)
-    }
-}
-
 // ---------- enum access: unit variant (bare ident) ----------
 
 struct UnitVariant<'a, 'de> {
@@ -489,10 +463,10 @@ impl<'a, 'de> VariantAccess<'de> for PayloadVariantAccess<'a, 'de> {
         Ok(value)
     }
 
-    fn tuple_variant<V: Visitor<'de>>(self, _len: usize, visitor: V) -> Result<V::Value> {
-        let value = visitor.visit_seq(PositionalArgs { de: self.de })?;
-        self.de.stream.expect_matching(&Token::RParen)?;
-        Ok(value)
+    fn tuple_variant<V: Visitor<'de>>(self, len: usize, _visitor: V) -> Result<V::Value> {
+        // Multi-field unnamed variants have no schema field names.
+        // Single-field variants go through newtype_variant_seed instead.
+        Err(Error::MultiFieldTupleStructForbidden { name: "<tuple-variant>", len })
     }
 
     fn struct_variant<V: Visitor<'de>>(
@@ -500,7 +474,8 @@ impl<'a, 'de> VariantAccess<'de> for PayloadVariantAccess<'a, 'de> {
         _fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value> {
-        let value = visitor.visit_map(StructReader { de: self.de, peeked_key: None })?;
+        // Positional — same as deserialize_struct.
+        let value = visitor.visit_seq(PositionalArgs { de: self.de })?;
         self.de.stream.expect_matching(&Token::RParen)?;
         Ok(value)
     }
@@ -597,18 +572,21 @@ mod tests {
     }
 
     #[test]
-    fn tuple_struct() {
+    fn tuple_struct_ser_rejected() {
         #[derive(Serialize, Deserialize, PartialEq, Debug)]
         struct Pair(i32, i32);
-        roundtrip(Pair(3, 4));
+        // Nota forbids multi-field unnamed structs on both sides.
+        assert!(to_string(&Pair(3, 4)).is_err());
+        assert!(from_str::<Pair>("(Pair 3 4)").is_err());
     }
 
     #[test]
-    fn tuple_variant() {
+    fn tuple_variant_ser_rejected() {
         #[derive(Serialize, Deserialize, PartialEq, Debug)]
         enum E { Pair(i32, i32), Triple(i32, i32, i32) }
-        roundtrip(E::Pair(3, 4));
-        roundtrip(E::Triple(1, 2, 3));
+        assert!(to_string(&E::Pair(3, 4)).is_err());
+        assert!(to_string(&E::Triple(1, 2, 3)).is_err());
+        assert!(from_str::<E>("(Pair 3 4)").is_err());
     }
 
     #[test]
@@ -701,7 +679,7 @@ mod tests {
     fn ignores_comments() {
         #[derive(Deserialize, PartialEq, Debug)]
         struct Point { x: f64, y: f64 }
-        let text = "(Point ;; comment\n  x=3.0 ;; inline\n  y=4.0)";
+        let text = "(Point ;; comment\n  3.0 ;; inline\n  4.0)";
         let p: Point = from_str(text).unwrap();
         assert_eq!(p, Point { x: 3.0, y: 4.0 });
     }
@@ -711,7 +689,7 @@ mod tests {
         #[derive(Deserialize, Debug)]
         #[allow(dead_code)]
         struct Point { x: f64, y: f64 }
-        assert!(from_str::<Point>("(Line x=1.0 y=2.0)").is_err());
+        assert!(from_str::<Point>("(Line 1.0 2.0)").is_err());
     }
 
     #[test]
