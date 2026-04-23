@@ -281,9 +281,16 @@ fn dedent(raw: &str) -> String {
         .unwrap_or(0);
 
     let mut out = String::new();
-    // Skip leading blank lines
-    let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
-    let end = lines.iter().rposition(|l| !l.trim().is_empty()).map(|i| i + 1).unwrap_or(0);
+    // Skip leading and trailing blank lines.
+    let Some(start) = lines.iter().position(|l| !l.trim().is_empty()) else {
+        // All blank — content is empty after dedent.
+        return out;
+    };
+    let end = lines
+        .iter()
+        .rposition(|l| !l.trim().is_empty())
+        .map(|i| i + 1)
+        .unwrap_or(lines.len());
 
     for (i, line) in lines[start..end].iter().enumerate() {
         if i > 0 {
