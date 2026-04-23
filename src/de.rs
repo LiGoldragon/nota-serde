@@ -77,6 +77,20 @@ impl<'de> Deserializer<'de> {
 fn int_to_i128(t: Token) -> Result<i128> {
     match t {
         Token::Int(i) => Ok(i),
+        Token::UInt(u) => Err(Error::Custom(format!(
+            "integer {u} exceeds i128::MAX; use a u128 field to hold it"
+        ))),
+        other => Err(Error::Custom(format!("expected integer, got {other:?}"))),
+    }
+}
+
+fn int_to_u128(t: Token) -> Result<u128> {
+    match t {
+        Token::Int(i) if i >= 0 => Ok(i as u128),
+        Token::Int(i) => Err(Error::Custom(format!(
+            "negative integer {i} cannot be represented as unsigned"
+        ))),
+        Token::UInt(u) => Ok(u),
         other => Err(Error::Custom(format!("expected integer, got {other:?}"))),
     }
 }
@@ -85,6 +99,7 @@ fn float(t: Token) -> Result<f64> {
     match t {
         Token::Float(f) => Ok(f),
         Token::Int(i) => Ok(i as f64),
+        Token::UInt(u) => Ok(u as f64),
         other => Err(Error::Custom(format!("expected float, got {other:?}"))),
     }
 }
@@ -126,24 +141,23 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
         v.visit_i128(i)
     }
     fn deserialize_u8<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
-        let i = int_to_i128(self.stream.expect_next()?)?;
-        v.visit_u8(i.try_into().map_err(|_| Error::Custom(format!("{i} out of u8 range")))?)
+        let u = int_to_u128(self.stream.expect_next()?)?;
+        v.visit_u8(u.try_into().map_err(|_| Error::Custom(format!("{u} out of u8 range")))?)
     }
     fn deserialize_u16<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
-        let i = int_to_i128(self.stream.expect_next()?)?;
-        v.visit_u16(i.try_into().map_err(|_| Error::Custom(format!("{i} out of u16 range")))?)
+        let u = int_to_u128(self.stream.expect_next()?)?;
+        v.visit_u16(u.try_into().map_err(|_| Error::Custom(format!("{u} out of u16 range")))?)
     }
     fn deserialize_u32<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
-        let i = int_to_i128(self.stream.expect_next()?)?;
-        v.visit_u32(i.try_into().map_err(|_| Error::Custom(format!("{i} out of u32 range")))?)
+        let u = int_to_u128(self.stream.expect_next()?)?;
+        v.visit_u32(u.try_into().map_err(|_| Error::Custom(format!("{u} out of u32 range")))?)
     }
     fn deserialize_u64<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
-        let i = int_to_i128(self.stream.expect_next()?)?;
-        v.visit_u64(i.try_into().map_err(|_| Error::Custom(format!("{i} out of u64 range")))?)
+        let u = int_to_u128(self.stream.expect_next()?)?;
+        v.visit_u64(u.try_into().map_err(|_| Error::Custom(format!("{u} out of u64 range")))?)
     }
     fn deserialize_u128<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {
-        let i = int_to_i128(self.stream.expect_next()?)?;
-        v.visit_u128(i.try_into().map_err(|_| Error::Custom(format!("{i} out of u128 range")))?)
+        v.visit_u128(int_to_u128(self.stream.expect_next()?)?)
     }
 
     fn deserialize_f32<V: Visitor<'de>>(self, v: V) -> Result<V::Value> {

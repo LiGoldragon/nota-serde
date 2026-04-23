@@ -15,7 +15,12 @@ pub enum Token {
     Equals,       // =
     Colon,        // :
     Bool(bool),
+    /// Signed integer literal. Fits in `[i128::MIN, i128::MAX]`.
     Int(i128),
+    /// Unsigned integer literal beyond `i128::MAX` and up to
+    /// `u128::MAX`. Used only when the raw digits exceed `i128::MAX`
+    /// — values that fit in `i128` are always tokenised as `Int`.
+    UInt(u128),
     Float(f64),
     Str(String),
     Bytes(Vec<u8>),
@@ -210,8 +215,7 @@ impl<'a> Lexer<'a> {
                 .map(Token::Float)
                 .map_err(|e| Error::Custom(format!("invalid float {raw:?}: {e}")))
         } else {
-            cleaned.parse::<i128>()
-                .map(Token::Int)
+            parse_int_literal(&cleaned, 10)
                 .map_err(|e| Error::Custom(format!("invalid integer {raw:?}: {e}")))
         }
     }
@@ -227,8 +231,7 @@ impl<'a> Lexer<'a> {
         }
         let raw = &self.input[digits_start..self.pos];
         let cleaned: String = raw.chars().filter(|c| *c != '_').collect();
-        i128::from_str_radix(&cleaned, radix)
-            .map(Token::Int)
+        parse_int_literal(&cleaned, radix)
             .map_err(|e| Error::Custom(format!("invalid radix-{radix} int {:?}: {e}", &self.input[start..self.pos])))
     }
 
@@ -267,6 +270,23 @@ fn hex_digit(b: u8) -> Option<u8> {
         b'0'..=b'9' => Some(b - b'0'),
         b'a'..=b'f' => Some(b - b'a' + 10),
         _ => None,
+    }
+}
+
+/// Parse a numeric literal (digits plus optional leading `-`) as `i128`
+/// if it fits; otherwise fall back to `u128` for the range
+/// `(i128::MAX, u128::MAX]`. Returns a `Token` carrying whichever
+/// representation preserves the value exactly.
+fn parse_int_literal(cleaned: &str, radix: u32) -> std::result::Result<Token, std::num::ParseIntError> {
+    match i128::from_str_radix(cleaned, radix) {
+        Ok(i) => Ok(Token::Int(i)),
+        Err(_) => {
+            // i128 overflow — try u128. This only succeeds for
+            // non-negative values above i128::MAX, so we preserve
+            // signed-vs-unsigned semantics and don't accidentally
+            // treat a user's `-5` as u128::MAX - 4.
+            u128::from_str_radix(cleaned, radix).map(Token::UInt)
+        }
     }
 }
 

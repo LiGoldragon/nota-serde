@@ -189,7 +189,6 @@ mod numbers {
     }
 
     #[test]
-    #[ignore = "u128::MAX overflows i128-based lexer; tracked in bd nota-serde for follow-up"]
     fn u128_max() {
         let a: u128 = u128::MAX;
         assert_eq!(from_str::<u128>(&to_string(&a).unwrap()).unwrap(), a);
@@ -197,9 +196,24 @@ mod numbers {
 
     #[test]
     fn u64_max_round_trip() {
-        // u64::MAX fits in i128, so this path works.
         let a: u64 = u64::MAX;
         assert_eq!(from_str::<u64>(&to_string(&a).unwrap()).unwrap(), a);
+    }
+
+    #[test]
+    fn u128_beyond_i128_max() {
+        // Exactly i128::MAX + 1 — the boundary where the lexer falls
+        // back from i128 to u128.
+        let a: u128 = (i128::MAX as u128) + 1;
+        assert_eq!(from_str::<u128>(&to_string(&a).unwrap()).unwrap(), a);
+    }
+
+    #[test]
+    fn negative_literal_cannot_deserialize_as_u64() {
+        // The lexer tokenises `-5` as Token::Int(-5); deserialize_u64
+        // must reject rather than silently wrapping.
+        let result: Result<u64, _> = from_str("-5");
+        assert!(result.is_err());
     }
 
     #[test]
