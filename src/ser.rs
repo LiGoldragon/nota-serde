@@ -23,6 +23,26 @@ pub struct Serializer {
     output: String,
 }
 
+/// A string value may be emitted bare (without `[ ]`) when its
+/// content is a non-empty ident-class token (PascalCase / camelCase
+/// / kebab-case) that is not one of the reserved keywords (`true`,
+/// `false`, `None`). This matches what [`crate::lexer`] accepts as
+/// `Token::Ident`.
+fn is_bare_string_eligible(v: &str) -> bool {
+    if v.is_empty() {
+        return false;
+    }
+    if matches!(v, "true" | "false" | "None") {
+        return false;
+    }
+    let mut chars = v.chars();
+    let first = chars.next().expect("checked non-empty above");
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 impl Serializer {
     fn append(&mut self, s: &str) {
         self.output.push_str(s);
@@ -31,6 +51,14 @@ impl Serializer {
     fn write_str_literal(&mut self, v: &str) -> Result<()> {
         if v.contains("|]") {
             return Err(Error::StringContainsMultilineCloser);
+        }
+        // Bare-identifier form: if the content is a valid ident-class
+        // token and not a reserved keyword, emit without delimiters.
+        // Canonical form favours bare for readability of
+        // identifier-shaped string values (e.g. `nota-serde`).
+        if is_bare_string_eligible(v) {
+            self.output.push_str(v);
+            return Ok(());
         }
         let needs_multiline = v.contains(']') || v.contains('\n');
         if needs_multiline {
@@ -402,7 +430,16 @@ mod tests {
         assert_eq!(to_string(&2.5f64).unwrap(), "2.5");
         assert_eq!(to_string(&1.0f64).unwrap(), "1.0");
         assert_eq!(to_string(&-0.5f32).unwrap(), "-0.5");
-        assert_eq!(to_string("hello").unwrap(), "[hello]");
+        // Ident-shaped strings emit bare; content requiring brackets
+        // goes through a separate test below.
+        assert_eq!(to_string("hello").unwrap(), "hello");
+        assert_eq!(to_string("kebab-name").unwrap(), "kebab-name");
+        // Reserved keywords must stay bracketed so they round-trip
+        // outside a bool / Option context.
+        assert_eq!(to_string("true").unwrap(), "[true]");
+        assert_eq!(to_string("None").unwrap(), "[None]");
+        // Content with a space can't be bare.
+        assert_eq!(to_string("hello world").unwrap(), "[hello world]");
     }
 
     #[test]
@@ -497,7 +534,7 @@ mod tests {
     #[test]
     fn tuple() {
         let t = (1i32, "a", true);
-        assert_eq!(to_string(&t).unwrap(), "<1 [a] true>");
+        assert_eq!(to_string(&t).unwrap(), "<1 a true>");
     }
 
     #[test]
@@ -534,9 +571,9 @@ mod tests {
         let mut m = BTreeMap::new();
         m.insert("beta", 2);
         m.insert("alpha", 1);
-        // BTreeMap iterates in key order, but nota sorts by serialized-key
-        // bytes, which for [alpha] / [beta] matches the lexicographic order.
-        assert_eq!(to_string(&m).unwrap(), "<([alpha] 1) ([beta] 2)>");
+        // Ident-shaped keys emit bare; the canonical sort compares
+        // the serialised key bytes, so `alpha` < `beta`.
+        assert_eq!(to_string(&m).unwrap(), "<(alpha 1) (beta 2)>");
     }
 
     #[test]
@@ -547,10 +584,10 @@ mod tests {
         m.insert("alpha", 1);
         m.insert("mu", 12);
         // HashMap iteration order is non-deterministic; canonical form
-        // must still emit in sorted-by-serialized-key order.
+        // must still emit in sorted-by-serialised-key order.
         assert_eq!(
             to_string(&m).unwrap(),
-            "<([alpha] 1) ([mu] 12) ([zeta] 26)>"
+            "<(alpha 1) (mu 12) (zeta 26)>"
         );
     }
 

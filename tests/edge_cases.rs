@@ -455,31 +455,33 @@ mod maps {
         m.insert("a".to_string(), 1);
         m.insert("b".to_string(), 2);
         let text = to_string(&m).unwrap();
-        assert_eq!(text, "<([a] 1) ([b] 2) ([c] 3)>");
+        // Ident-shaped keys emit bare; canonical sort on bytes.
+        assert_eq!(text, "<(a 1) (b 2) (c 3)>");
     }
 
     #[test]
     fn hashmap_sort_stable_across_runs() {
         // HashMap iteration order is non-deterministic; the serializer
-        // must re-sort by serialized key bytes every time.
+        // must re-sort by serialised key bytes every time.
         let mut m: HashMap<&str, i32> = HashMap::new();
         for (k, v) in [("zeta", 26), ("alpha", 1), ("mu", 12), ("beta", 2)] {
             m.insert(k, v);
         }
         let text = to_string(&m).unwrap();
-        assert_eq!(text, "<([alpha] 1) ([beta] 2) ([mu] 12) ([zeta] 26)>");
+        assert_eq!(text, "<(alpha 1) (beta 2) (mu 12) (zeta 26)>");
     }
 
     #[test]
     fn integer_keyed_sort_is_lexicographic_by_bytes() {
         // Canonical order is by serialised key bytes: "1" < "10" < "2".
-        // Not arithmetic — deterministic, but surprising.
+        // Not arithmetic — deterministic, but surprising. String values
+        // here are ident-shaped so they serialise bare.
         let mut m: BTreeMap<i32, &str> = BTreeMap::new();
         m.insert(1, "one");
         m.insert(10, "ten");
         m.insert(2, "two");
         let text = to_string(&m).unwrap();
-        assert_eq!(text, "<(1 [one]) (10 [ten]) (2 [two])>");
+        assert_eq!(text, "<(1 one) (10 ten) (2 two)>");
     }
 
     #[test]
@@ -680,6 +682,118 @@ mod enums {
 }
 
 // ---------------------------------------------------------------------------
+// Bare-identifier strings — a String field may accept an un-delimited
+// ident-class token instead of `[ ]`. Canonical output emits bare when
+// the content is eligible.
+
+mod bare_strings {
+    use super::*;
+
+    #[test]
+    fn canonical_emits_bare_for_ident_content() {
+        assert_eq!(to_string(&"hello".to_string()).unwrap(), "hello");
+        assert_eq!(to_string(&"kebab-name".to_string()).unwrap(), "kebab-name");
+        assert_eq!(to_string(&"PascalCase".to_string()).unwrap(), "PascalCase");
+        assert_eq!(to_string(&"_private".to_string()).unwrap(), "_private");
+        assert_eq!(to_string(&"with_underscore".to_string()).unwrap(), "with_underscore");
+        assert_eq!(to_string(&"a".to_string()).unwrap(), "a");
+    }
+
+    #[test]
+    fn canonical_keeps_brackets_when_not_eligible() {
+        // Space → needs brackets.
+        assert_eq!(to_string(&"hello world".to_string()).unwrap(), "[hello world]");
+        // Leading digit → not an ident.
+        assert_eq!(to_string(&"42abc".to_string()).unwrap(), "[42abc]");
+        // Leading hyphen → not an ident.
+        assert_eq!(to_string(&"-foo".to_string()).unwrap(), "[-foo]");
+        // Empty → `[]`.
+        assert_eq!(to_string(&"".to_string()).unwrap(), "[]");
+        // Reserved words stay bracketed.
+        assert_eq!(to_string(&"true".to_string()).unwrap(), "[true]");
+        assert_eq!(to_string(&"false".to_string()).unwrap(), "[false]");
+        assert_eq!(to_string(&"None".to_string()).unwrap(), "[None]");
+    }
+
+    #[test]
+    fn parse_bare_into_string() {
+        let s: String = from_str("hello").unwrap();
+        assert_eq!(s, "hello");
+        let s: String = from_str("kebab-name").unwrap();
+        assert_eq!(s, "kebab-name");
+        let s: String = from_str("PascalCase").unwrap();
+        assert_eq!(s, "PascalCase");
+        let s: String = from_str("_private").unwrap();
+        assert_eq!(s, "_private");
+    }
+
+    #[test]
+    fn bracketed_form_still_accepted() {
+        // Both forms must parse for backward compatibility.
+        let s: String = from_str("[hello]").unwrap();
+        assert_eq!(s, "hello");
+        let s: String = from_str("[kebab-name]").unwrap();
+        assert_eq!(s, "kebab-name");
+    }
+
+    #[test]
+    fn bare_in_vec_of_strings() {
+        let text = "<tools-documentation nota nota-serde nexus>";
+        let v: Vec<String> = from_str(text).unwrap();
+        assert_eq!(v, vec!["tools-documentation", "nota", "nota-serde", "nexus"]);
+        // Round-trip emits bare too.
+        assert_eq!(to_string(&v).unwrap(), text);
+    }
+
+    #[test]
+    fn bare_in_struct_field() {
+        #[derive(Deserialize, Serialize, PartialEq, Debug)]
+        struct Config { name: String, kind: String }
+        let c: Config = from_str("(Config nota data-format)").unwrap();
+        assert_eq!(c, Config { name: "nota".into(), kind: "data-format".into() });
+        assert_eq!(to_string(&c).unwrap(), "(Config nota data-format)");
+    }
+
+    #[test]
+    fn option_string_none_vs_bracketed_none() {
+        // In Option<String>, bare `None` is Option::None.
+        let v: Option<String> = from_str("None").unwrap();
+        assert_eq!(v, None);
+        // `[None]` inside Option<String> is Some("None").
+        let v: Option<String> = from_str("[None]").unwrap();
+        assert_eq!(v, Some("None".into()));
+        // Round-trip: Some("None") must emit bracketed to avoid
+        // collapsing to Option::None.
+        let back = to_string(&Some("None".to_string())).unwrap();
+        assert_eq!(back, "[None]");
+    }
+
+    #[test]
+    fn bare_none_as_string_outside_option() {
+        // Plain String (no Option wrapper): bare `None` reads as
+        // the string "None".
+        let s: String = from_str("None").unwrap();
+        assert_eq!(s, "None");
+        // Round-trip: String "None" must emit bracketed so it won't
+        // later be mistaken for Option::None if the field gains
+        // Option<> wrapping.
+        assert_eq!(to_string(&"None".to_string()).unwrap(), "[None]");
+    }
+
+    #[test]
+    fn bare_ident_string_round_trip_with_reserved_in_sequence() {
+        // Mix bare, bracketed-because-reserved, and bracketed-because-
+        // space in a single Vec<String>. Canonical form preserves the
+        // distinction.
+        let v = vec!["ok".to_string(), "true".to_string(), "x y".to_string()];
+        let text = to_string(&v).unwrap();
+        assert_eq!(text, "<ok [true] [x y]>");
+        let back: Vec<String> = from_str(&text).unwrap();
+        assert_eq!(back, v);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Forbidden serde attrs — documents what happens when a user reaches for
 // features the positional-records design doesn't support.
 
@@ -695,7 +809,8 @@ mod forbidden_attrs {
         // map, not a `(TypeName …)` record — almost certainly not what the
         // user wants. The nota spec forbids this construct; this test
         // documents the current (surprising) behaviour so a regression
-        // toward a "clean-looking" result gets caught.
+        // toward a "clean-looking" result gets caught. (Keys emit bare
+        // because they're ident-shaped.)
         #[derive(Serialize, Deserialize, PartialEq, Debug)]
         struct Inner { b: i32, c: i32 }
         #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -706,9 +821,7 @@ mod forbidden_attrs {
         }
         let v = Outer { a: 1, inner: Inner { b: 2, c: 3 } };
         let text = to_string(&v).unwrap();
-        // Output is a map form, NOT `(Outer 1 2 3)`. Map-entry order
-        // is canonicalised by serialised key bytes: [a] < [b] < [c].
-        assert_eq!(text, "<([a] 1) ([b] 2) ([c] 3)>");
+        assert_eq!(text, "<(a 1) (b 2) (c 3)>");
     }
 }
 

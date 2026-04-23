@@ -184,6 +184,13 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_str<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         match self.stream.expect_next()? {
             Token::Str(s) => visitor.visit_string(s),
+            // Bare-identifier form: a schema expecting a string may
+            // receive an ident-class token, which we treat as the
+            // string content. Reserved keywords (`true`, `false`) are
+            // already tokenised separately; `None` reaches here only
+            // outside an `Option` context, where treating it as the
+            // literal string "None" is correct.
+            Token::Ident(s) => visitor.visit_string(s),
             other => Err(Error::Custom(format!("expected string, got {other:?}"))),
         }
     }

@@ -73,18 +73,22 @@ fn roundtrip_realistic_document() {
     let text = nota_serde::to_string(&doc).expect("serialize");
 
     // Spot-check stable substrings. Fields are positional in
-    // source-declaration order — name first.
-    assert!(text.starts_with("(Project [nota-serde] [0.1.0]"));
+    // source-declaration order — name first. Ident-shaped strings
+    // emit bare; strings starting with a digit (e.g. "0.1.0")
+    // can't go bare and stay in `[ ]`.
+    assert!(text.starts_with("(Project nota-serde [0.1.0]"));
     assert!(text.contains("LicenseOfNonAuthority"));
+    // The version-string literal "2026-04-23" starts with a digit so
+    // it can't go bare; stays in `[ ]`.
     assert!(text.contains("(Released [2026-04-23])"));
-    // Option<T>::None renders as bare `None`; final position in the record.
+    // Option<T>::None renders as bare `None`; final position.
     assert!(text.ends_with("None)"));
 
-    // Canonical map sort: debug < strict < verbose.
-    // Map entries are `([key] value)` triples inside `< >`.
-    let d = text.find("[debug]").unwrap();
-    let s = text.find("[strict]").unwrap();
-    let v = text.find("[verbose]").unwrap();
+    // Canonical map sort: debug < strict < verbose. Keys are
+    // ident-shaped so they emit bare.
+    let d = text.find("(debug ").unwrap();
+    let s = text.find("(strict ").unwrap();
+    let v = text.find("(verbose ").unwrap();
     assert!(d < s && s < v, "map entries not sorted: {text}");
 
     let back: Project = nota_serde::from_str(&text).expect("deserialize");
@@ -102,8 +106,10 @@ fn roundtrip_with_archived_status_variant() {
 
     let text = nota_serde::to_string(&doc).expect("serialize");
     // Struct-variant in positional form: (Archived reason-val at_commit-val).
-    assert!(text.contains("(Archived [superseded by nexus-serde] [abcdef])"));
-    // Option::Some(x) renders transparently — just the string.
+    // "superseded by nexus-serde" has a space → bracketed; "abcdef"
+    // is ident-shaped → bare.
+    assert!(text.contains("(Archived [superseded by nexus-serde] abcdef)"));
+    // Option::Some(x) renders transparently; content has a space.
     assert!(text.contains("[see report 007]"));
 
     let back: Project = nota_serde::from_str(&text).expect("deserialize");
