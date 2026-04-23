@@ -680,6 +680,39 @@ mod enums {
 }
 
 // ---------------------------------------------------------------------------
+// Forbidden serde attrs — documents what happens when a user reaches for
+// features the positional-records design doesn't support.
+
+mod forbidden_attrs {
+    use super::*;
+
+    #[test]
+    fn flatten_produces_map_shape_not_record() {
+        // `#[serde(flatten)]` asks serde's derive to inline the nested
+        // struct's fields into the parent's field list, using map-based
+        // (key-name) routing. Positional records have no key-name routing,
+        // so the derive falls through to serialize_map and the result is a
+        // map, not a `(TypeName …)` record — almost certainly not what the
+        // user wants. The nota spec forbids this construct; this test
+        // documents the current (surprising) behaviour so a regression
+        // toward a "clean-looking" result gets caught.
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct Inner { b: i32, c: i32 }
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct Outer {
+            a: i32,
+            #[serde(flatten)]
+            inner: Inner,
+        }
+        let v = Outer { a: 1, inner: Inner { b: 2, c: 3 } };
+        let text = to_string(&v).unwrap();
+        // Output is a map form, NOT `(Outer 1 2 3)`. Map-entry order
+        // is canonicalised by serialised key bytes: [a] < [b] < [c].
+        assert_eq!(text, "<([a] 1) ([b] 2) ([c] 3)>");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Comments are ignored between any tokens.
 
 mod comments {
