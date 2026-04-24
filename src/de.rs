@@ -168,17 +168,22 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.stream.expect_next()? {
-            Token::Str(s) => {
-                let mut chars = s.chars();
-                let c = chars.next().ok_or_else(|| Error::Custom("empty string for char".into()))?;
-                if chars.next().is_some() {
-                    return Err(Error::Custom(format!("expected single char, got {s:?}")));
-                }
-                visitor.visit_char(c)
-            }
-            other => Err(Error::Custom(format!("expected string for char, got {other:?}"))),
+        // Char values may arrive as either Token::Str (bracketed form
+        // `[x]`) or Token::Ident (bare-identifier form for single-char
+        // idents like `a`, `_`). `serialize_char` routes through
+        // write_str_literal which emits bare when eligible — the
+        // deserialize path must accept both.
+        let (source, s) = match self.stream.expect_next()? {
+            Token::Str(s) => ("string", s),
+            Token::Ident(s) => ("identifier", s),
+            other => return Err(Error::Custom(format!("expected string for char, got {other:?}"))),
+        };
+        let mut chars = s.chars();
+        let c = chars.next().ok_or_else(|| Error::Custom(format!("empty {source} for char")))?;
+        if chars.next().is_some() {
+            return Err(Error::Custom(format!("expected single char, got {s:?}")));
         }
+        visitor.visit_char(c)
     }
 
     fn deserialize_str<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {

@@ -852,3 +852,35 @@ mod comments {
         assert_eq!(p, Point { x: 1, y: 2 });
     }
 }
+
+mod char_edge_cases {
+    use super::*;
+
+    #[test]
+    fn char_single_roundtrip() {
+        // CRITICAL TEST: char field serializes via serialize_char
+        // which calls write_str_literal. For 'a', is_bare_string_eligible
+        // returns true, so it emits bare `a`.
+        // But deserialize_char only accepts Token::Str, not Token::Ident.
+        // This would be a round-trip FAILURE.
+        let original = 'a';
+        let text = to_string(&original).unwrap();
+        println!("char 'a' serializes to: {:?}", text);
+        let result: Result<char, _> = from_str(&text);
+        println!("Deserialize result: {:?}", result);
+        // This assertion will reveal the bug.
+        assert!(result.is_ok(), "char round-trip failed: serialized as {:?}", text);
+        assert_eq!(result.unwrap(), original);
+    }
+
+    #[test]
+    fn char_in_struct() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct Pair { a: char, b: char }
+        let v = Pair { a: 'x', b: 'y' };
+        let text = to_string(&v).unwrap();
+        println!("Struct with chars serializes to: {:?}", text);
+        let back: Pair = from_str(&text).unwrap();
+        assert_eq!(back, v);
+    }
+}
