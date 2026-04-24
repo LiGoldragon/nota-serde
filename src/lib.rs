@@ -1,12 +1,17 @@
 //! nota-serde — serde Serializer + Deserializer for the nota data format.
 //!
-//! Implements [`serde::Serializer`] and [`serde::Deserializer`] over nota
-//! syntax: 4 delimiter pairs (`( )` records, `[ ]` / `[| |]` strings,
-//! `< >` sequences), 2 sigils (`;;` line comments, `#` byte-literal
-//! prefix), Pascal/camel/kebab identifiers. Records are positional —
-//! field identities come from the Rust schema, not the text. Canonical
-//! form: source-declaration field order, sorted map keys,
-//! shortest-roundtrip numbers, single-space expression separators.
+//! Thin public façade over [`nota_serde_core`]. The kernel (Lexer,
+//! Token, Error, Serializer, Deserializer, and all the ser/de
+//! machinery for nota's grammar) lives in that crate and is shared
+//! with [nexus-serde](https://github.com/LiGoldragon/nexus-serde).
+//!
+//! nota grammar: 4 delimiter pairs (`( )` records, `[ ]` / `[| |]`
+//! strings, `< >` sequences), 2 sigils (`;;` line comments, `#`
+//! byte-literal prefix), Pascal/camel/kebab identifiers. Records are
+//! positional — field identities come from the Rust schema, not the
+//! text. Canonical form: source-declaration field order, sorted map
+//! keys, shortest-roundtrip numbers, single-space expression
+//! separators, bare identifier-shaped strings where eligible.
 //!
 //! ```
 //! #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
@@ -20,11 +25,4 @@
 //! # Ok::<(), nota_serde::Error>(())
 //! ```
 
-mod de;
-mod error;
-mod lexer;
-mod ser;
-
-pub use de::{from_str, Deserializer};
-pub use error::{Error, Result};
-pub use ser::{to_string, Serializer};
+pub use nota_serde_core::{from_str, to_string, Deserializer, Error, Result, Serializer};

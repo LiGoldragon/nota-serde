@@ -44,7 +44,14 @@
           pname = "nota-serde";
           version = "0.1.0";
           src = ./.;
-          cargoLock.lockFile = ./Cargo.lock;
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+            # Hash of the nota-serde-core git checkout Cargo pins in
+            # Cargo.lock. Bump when the locked rev changes.
+            outputHashes = {
+              "nota-serde-core-0.1.0" = "sha256-Y+gHLXsHPIZ4zE5jugOkruGrVkvsgIe55y4IhrdkAOg=";
+            };
+          };
           doCheck = true;
         };
 
