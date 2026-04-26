@@ -5,13 +5,14 @@
 //! machinery for nota's grammar) lives in that crate and is shared
 //! with [nexus-serde](https://github.com/LiGoldragon/nexus-serde).
 //!
-//! nota grammar: 4 delimiter pairs (`( )` records, `[ ]` / `[| |]`
-//! strings, `< >` sequences), 2 sigils (`;;` line comments, `#`
-//! byte-literal prefix), Pascal/camel/kebab identifiers. Records are
-//! positional — field identities come from the Rust schema, not the
-//! text. Canonical form: source-declaration field order, sorted map
-//! keys, shortest-roundtrip numbers, single-space expression
-//! separators, bare identifier-shaped strings where eligible.
+//! nota grammar: 2 delimiter pairs (`( )` records, `[ ]` sequences),
+//! 2 string forms (`" "` inline, `""" """` multiline), 2 sigils
+//! (`;;` line comments, `#` byte-literal prefix),
+//! Pascal/camel/kebab identifiers. Records are positional — field
+//! identities come from the Rust schema, not the text. Canonical
+//! form: source-declaration field order, sorted map keys,
+//! shortest-roundtrip numbers, single-space expression separators,
+//! bare identifier-shaped strings where eligible.
 //!
 //! ```
 //! #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
